@@ -82,14 +82,13 @@ consumers, checks that they work, revokes the old one, and puts everything back 
 - Anyone who wants an agent to clean up a large personal vault (duplicates, leaked and breached
   passwords, dead logins) without handing it the vault.
 
-## Requirements
+## Getting started
 
-- Linux (macOS should work but is untested), Python 3.11+, [uv](https://docs.astral.sh/uv/).
-- The [Bitwarden CLI](https://bitwarden.com/help/cli/) `bw` on `PATH`.
-- A Vaultwarden or Bitwarden server with an organization, and a dedicated **manager account** in
-  it (an owner or admin of the organization) for the `secrets` toolset.
+### 1. Install
 
-## Install
+You need Linux or macOS (macOS should work but is untested), Python 3.11+,
+[uv](https://docs.astral.sh/uv/) and the [Bitwarden CLI](https://bitwarden.com/help/cli/) `bw`
+on `PATH`.
 
 ```bash
 uv tool install git+https://github.com/ai2sky/blind-vault-mcp
@@ -97,20 +96,43 @@ uv tool install git+https://github.com/ai2sky/blind-vault-mcp
 
 This puts `blind-vault-mcp` and the `vw-*` commands on your `PATH`.
 
-## Configure
+### 2. Create the manager account
 
-Settings come from the process environment or from `~/.config/vw/env` (`KEY=VALUE` lines):
+The `secrets` toolset never acts as you. It acts as a dedicated Vaultwarden user, the
+**manager**, that sees only your organization's collections and never your personal vault.
+
+1. In the Vaultwarden web vault, create a new user, for example `vw-manager@example.com`, with
+   its own strong master password. Do not reuse your personal account.
+2. As the organization owner, invite that user in *Organization → Members* as an **Admin**, so
+   it can create collections and invite service accounts. Accept the invitation as the manager,
+   then confirm it as the owner.
+3. Signed in as the manager, open *Account settings → Security → Keys → View API key* and copy
+   `client_id` and `client_secret`.
+4. Note the organization id: it is the UUID in the web vault URL,
+   `…/#/organizations/<organization-id>/vault`.
+
+More in [the manager account and collections](docs/manager.md).
+
+### 3. Configure
 
 ```bash
 mkdir -p ~/.config/vw
 cat > ~/.config/vw/env <<'EOF'
 VW_URL=https://vault.example.com
-VW_ORGANIZATION_ID=<organization uuid>
+VW_ORGANIZATION_ID=<organization-id>
 EOF
 ```
 
-The manager account's credentials live in the OS keyring (service `vw-manager`), never in a
-file next to the code. Each command asks for the value with a hidden prompt:
+Then store the manager's three credentials where your system keeps secrets:
+
+| Where you run it | Store | How |
+|---|---|---|
+| macOS | Keychain | the `keyring` commands below |
+| Windows | Credential Manager | the `keyring` commands below (only the `secrets` toolset; untested) |
+| Linux desktop (GNOME, KDE) | Secret Service: GNOME Keyring or KWallet | the `keyring` commands below |
+| Linux server, container, CI | no keyring there: files readable only by the server's user | `VW_CLIENT_ID`, `VW_CLIENT_SECRET_FILE`, `VW_MASTER_PASSWORD_FILE` |
+
+With a keyring, each command asks for the value with a hidden prompt:
 
 ```bash
 uv tool run --from keyring keyring set vw-manager client_id        # user.xxxxxxxx-…
@@ -118,21 +140,55 @@ uv tool run --from keyring keyring set vw-manager client_secret
 uv tool run --from keyring keyring set vw-manager master_password
 ```
 
-On a headless host use `VW_CLIENT_ID`, `VW_CLIENT_SECRET_FILE` and `VW_MASTER_PASSWORD_FILE`
-instead (files readable only by the server's user).
-
-For approvals and notifications, point `VW_NOTIFY_URL` at any endpoint that accepts JSON
-`{"text": "..."}`: a Slack or Mattermost incoming webhook, or a small bridge to your messenger.
-An optional bearer token goes in `VW_NOTIFY_TOKEN_FILE` or the keyring entry `notify_token`.
-Without it, tools that need approval refuse instead of waiting.
-
-## Use with Claude Code
+Without one, put the secret and the password in files of their own (`chmod 600`) and point the
+server at them:
 
 ```bash
-claude mcp add --scope user blind-vault -e VW_TOOLSETS=secrets -- blind-vault-mcp
+cat >> ~/.config/vw/env <<'EOF'
+VW_CLIENT_ID=user.xxxxxxxx-...
+VW_CLIENT_SECRET_FILE=/etc/vw/client-secret
+VW_MASTER_PASSWORD_FILE=/etc/vw/master-password
+EOF
 ```
 
-Start a new session and ask for what you need:
+### 4. Connect to Claude Code
+
+```bash
+claude mcp add --scope user blind-vault -- blind-vault-mcp
+```
+
+Start a new session and ask *"list my Vaultwarden collections"*. A list of names means the
+manager logged in. An error names the missing setting.
+
+### 5. Optional: approvals and the personal vault
+
+- **Approvals.** Point `VW_NOTIFY_URL` at any endpoint that accepts JSON `{"text": "..."}`: a
+  Slack or Mattermost incoming webhook, or a small bridge to your messenger. An optional bearer
+  token goes in `VW_NOTIFY_TOKEN_FILE` or the keyring entry `notify_token`. Without it, tools
+  that need approval refuse instead of waiting. See [approval](docs/approval.md).
+- **The personal vault.** Run `vw-vault unlock` and add `-e VW_TOOLSETS=secrets,vault` to the
+  `claude mcp add` line. See [below](#the-personal-vault).
+
+### How unlocking works
+
+There are two unlocks, one per kind of vault, on purpose.
+
+- **The manager unlocks itself.** On each call the server runs `bw login --apikey` and
+  `bw unlock` with the manager's credentials from the keyring or the files. It passes them to
+  `bw` through its environment, never on the command line, and keeps the session inside its own
+  process. Nobody has to be there, because the manager can only reach what the organization
+  gave it.
+- **The personal vault is unlocked by you, in your own terminal.** `vw-vault unlock` asks for
+  your API key (it may sit in the keyring, service `vw-vault`) and your master password through a
+  hidden prompt that is never stored. You can use a FIDO2 security key instead: PIN and a touch,
+  with the master password kept on disk encrypted by a key only the token gives out
+  (`vw-vault unlock --enroll` registers one). The daemon then holds the `bw` session in memory,
+  serves a `0600` Unix socket, and locks itself after two hours idle (`VW_VAULT_IDLE`) or on
+  `vw-vault lock`. While it is locked, vault tools tell the agent to ask you to unlock.
+
+## Example: a new service, end to end
+
+With the server connected, ask Claude Code for what you need:
 
 > Set up secrets for the new `billing-api` service: a collection, a generated `DB_PASSWORD`,
 > and read access for `svc-billing-api@example.com`. I'll enter the Stripe key myself.
