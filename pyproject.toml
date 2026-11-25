@@ -1,0 +1,58 @@
+[project]
+name = "blind-vault-mcp"
+version = "0.1.0"
+description = "A Vaultwarden MCP server for AI agents that manage secrets without ever seeing a value"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Pavel Statsenko" }]
+keywords = ["mcp", "model-context-protocol", "vaultwarden", "bitwarden", "secrets", "ai-agents", "claude-code"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = [
+    "mcp>=1.10,<2",
+    "httpx>=0.27",
+    "ruamel.yaml>=0.18",
+    "keyring>=24",
+    "fido2>=1.1,<3",
+    "pyjwt[crypto]>=2.8",
+]
+
+[project.optional-dependencies]
+login-checks = ["playwright>=1.40"]  # opt-in login checks of the personal vault; then `playwright install chromium`
+
+[project.urls]
+Repository = "https://github.com/ai2sky/blind-vault-mcp"
+
+[project.scripts]
+blind-vault-mcp = "blind_vault_mcp.server:main"
+vw-server = "vw_server.server:main"
+vw-vault-server = "vw_vault.server:main"
+vw-vault = "vw_vault.daemon:main"
+vw-put = "vw_server.put:main"
+vw-rm = "vw_server.rm:main"
+vw-env = "vw_server.env:main"
+vw-approve = "vw_server.approve:main"
+vw-service-account = "vw_server.service_account:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blind_vault_mcp", "src/vw_server", "src/vw_vault"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
